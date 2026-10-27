@@ -1,0 +1,6 @@
+requests:               20 (concurrency 8, errors 0)
+latency p50:            979 ms
+latency p95:            1787 ms
+LLM calls / request:    1.25
+embed calls / request:  1.00
+tokens / request:       1590

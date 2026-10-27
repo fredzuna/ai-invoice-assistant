@@ -1,0 +1,15 @@
+{"tenant_id": "acme", "question": "Which policy covers reverse charge for customers with a tax registration number, and yearly subscriptions that must be cancelled before the anniversary?", "expected_doc_id": "acme-policy-001"}
+{"tenant_id": "acme", "question": "In the price list that includes a free sandbox environment and two months free when the year is paid upfront, what does Scale 500 cost per month?", "expected_doc_id": "acme-pricing-table-004"}
+{"tenant_id": "acme", "question": "Where is the rate for data export when invoices sent by post are charged per page and payments clear through Faster Payments?", "expected_doc_id": "acme-tariff-003"}
+{"tenant_id": "acme", "question": "Does a complaint about a bill have to be justified in writing, and can the numbers be recycled later?", "expected_doc_id": "acme-faq-002"}
+{"tenant_id": "acme", "question": "Which support case mentions exchange rate differences applied twice on the same line and a file truncated at the last full row?", "expected_doc_id": "acme-attachment-005"}
+{"tenant_id": "globex", "question": "Which policy says a credit can never exceed the invoice total and that month-to-month subscriptions renew on the same calendar day?", "expected_doc_id": "globex-policy-004"}
+{"tenant_id": "globex", "question": "In the list that locks the price for a fixed period and validates exemption certificates automatically, what is the monthly price of the Education plan?", "expected_doc_id": "globex-pricing-table-001"}
+{"tenant_id": "globex", "question": "What is the rate for audit log retention on the list where bank transfers take several business days to settle and rates are billed in pounds with VAT shown separately?", "expected_doc_id": "globex-tariff-002"}
+{"tenant_id": "globex", "question": "Which answer says archived records stay searchable but become read-only, and that each PDF copy keeps the layout it was sent with?", "expected_doc_id": "globex-faq-006"}
+{"tenant_id": "globex", "question": "Which case involves an invoice issued in a different currency than the customer contract, with an amount column that uses a comma as decimal separator?", "expected_doc_id": "globex-attachment-003"}
+{"tenant_id": "initech", "question": "Which policy says partners keep a wholesale margin and that goodwill refunds are capped per customer per year?", "expected_doc_id": "initech-policy-007"}
+{"tenant_id": "initech", "question": "What does the Scale 500 plan cost per month in the list that follows ASC 606 and gives two months free when paid upfront?", "expected_doc_id": "initech-pricing-table-002"}
+{"tenant_id": "initech", "question": "What is the rate for an extra seat on the list where files move to cold storage and withholding taxes are deducted at source?", "expected_doc_id": "initech-tariff-005"}
+{"tenant_id": "initech", "question": "Which answer says the ZIP bundle link expires and that reports break consumption down by meter and by day?", "expected_doc_id": "initech-faq-003"}
+{"tenant_id": "initech", "question": "Which support case is about a bill in the wrong money, where conversion differences were counted two times?", "expected_doc_id": "initech-attachment-008"}
