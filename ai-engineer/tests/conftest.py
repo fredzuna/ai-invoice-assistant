@@ -11,10 +11,12 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
+from typing import Any
 
 import httpx
 import pytest_asyncio
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from psycopg_pool import AsyncConnectionPool
 
 from app.clients.embeddings import EmbeddingClient
@@ -52,15 +54,77 @@ def embedding_client() -> EmbeddingClient:
     return EmbeddingClient(http)
 
 
-def llm_client(reply: Callable[[dict], dict]) -> LLMClient:
-    """LLM client backed by a scripted gateway: reply(payload) -> assistant message."""
+class ScriptedChatModel:
+    def __init__(self, reply: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self.reply = reply
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        message = reply(json.loads(request.content))
-        return httpx.Response(200, json={"message": message, "usage": {"total_tokens": 42}})
+    def bind_tools(self, tools: Sequence[dict[str, Any]]) -> "BoundScriptedChatModel":
+        return BoundScriptedChatModel(self.reply, tools)
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://gateway")
-    return LLMClient(http)
+    async def ainvoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
+        return await BoundScriptedChatModel(self.reply, None).ainvoke(messages)
+
+
+class BoundScriptedChatModel:
+    def __init__(
+        self,
+        reply: Callable[[dict[str, Any]], dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None,
+    ) -> None:
+        self.reply = reply
+        self.tools = tools
+
+    async def ainvoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
+        payload = {"messages": [_message_payload(message) for message in messages]}
+        if self.tools is not None:
+            payload["tools"] = list(self.tools)
+        message = self.reply(payload)
+        tool_calls = [
+            {
+                "id": call["id"],
+                "name": call["name"],
+                "args": call.get("arguments") or {},
+                "type": "tool_call",
+            }
+            for call in message.get("tool_calls") or []
+        ]
+        return AIMessage(
+            content=message.get("content") or "",
+            tool_calls=tool_calls,
+            usage_metadata={"input_tokens": 20, "output_tokens": 22, "total_tokens": 42},
+        )
+
+
+def _message_payload(message: BaseMessage) -> dict[str, Any]:
+    if message.type == "system":
+        return {"role": "system", "content": message.text()}
+    if message.type == "human":
+        return {"role": "user", "content": message.text()}
+    if message.type == "ai":
+        payload = {"role": "assistant", "content": message.text()}
+        if isinstance(message, AIMessage) and message.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call["id"],
+                    "name": call["name"],
+                    "arguments": call["args"],
+                }
+                for call in message.tool_calls
+            ]
+        return payload
+    if isinstance(message, ToolMessage):
+        return {
+            "role": "tool",
+            "tool_call_id": message.tool_call_id,
+            "name": message.name,
+            "content": message.text(),
+        }
+    raise ValueError(f"Unsupported test message type: {message.type}")
+
+
+def llm_client(reply: Callable[[dict[str, Any]], dict[str, Any]]) -> LLMClient:
+    """Create an LLM client backed by a scripted model for deterministic tests."""
+    return LLMClient(ScriptedChatModel(reply))
 
 
 @pytest_asyncio.fixture

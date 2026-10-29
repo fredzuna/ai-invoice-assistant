@@ -12,13 +12,25 @@ Your task is the one you would get on day 1: assess how ready it is, prioritize 
 
 From this folder:
 
+The chat model runs locally through Ollama (`llama3.1:8b` by default), and LangGraph
+orchestrates tool calls. Start the services and fetch the model before sending requests:
+
 ```bash
 bin/setup.sh
+docker compose exec ollama ollama pull llama3.1:8b
 bin/seed.sh
 curl -s localhost:8000/v1/ask -H 'Content-Type: application/json' -d '{"tenant_id":"acme","question":"What is the refund policy for annual plans?"}'
 ```
 
-**Save the output of `bin/bench.sh` before you change anything**: it is your latency and cost baseline. There are **10 tests** that run in CI and **must stay green**. If a change of yours breaks them, either fix them with good judgment or explain why the test was wrong. The model service and the embedding service are local simulations: you don't need any API keys.
+Set `LLM_MODEL` to use another Ollama model and `OLLAMA_BASE_URL` when running outside
+Docker. `LLM_TIMEOUT_S` controls the model request timeout (120 seconds by default).
+
+**Save the output of `bin/bench.sh` before you change anything**: it is your latency and cost baseline. There are **10 tests** that run in CI and **must stay green**. If a change of yours breaks them, either fix them with good judgment or explain why the test was wrong. The embedding service remains a local simulation; no external API key is required.
+
+`langchain-ollama` connects the application to Ollama and provides its chat/tool-calling
+interface. The direct `ollama` dependency exposes provider errors so failed requests keep
+the app's explicit upstream-error and retry behavior. `langgraph` manages the model/tool/
+model execution flow with a bounded number of iterations.
 
 ## What to deliver
 

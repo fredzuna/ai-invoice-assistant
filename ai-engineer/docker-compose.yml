@@ -5,12 +5,13 @@ services:
       - "${API_PORT:-8000}:8000"
     environment:
       DATABASE_URL: postgresql://billforge:billforge@postgres:5432/billforge
-      LLM_BASE_URL: http://model-gateway:8001
+      OLLAMA_BASE_URL: http://ollama:11434
+      LLM_MODEL: llama3.1:8b
       EMBEDDING_BASE_URL: http://embedding-service:8002
     depends_on:
       postgres:
         condition: service_healthy
-      model-gateway:
+      ollama:
         condition: service_healthy
       embedding-service:
         condition: service_healthy
@@ -36,13 +37,14 @@ services:
       timeout: 3s
       retries: 20
 
-  # model gateway simulation
-  model-gateway:
-    build: ./services/model_gateway
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      test: ["CMD", "ollama", "list"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 20
 
   embedding-service:
@@ -55,3 +57,4 @@ services:
 
 volumes:
   pgdata:
+  ollama:

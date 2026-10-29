@@ -1,12 +1,34 @@
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from ollama import ResponseError
 
 from app.clients.errors import UpstreamError
 from app.middleware.metrics import record_llm_call, record_tokens
 
-MAX_ATTEMPTS = 2  # one call plus a single retry
+MAX_ATTEMPTS = 2
+
+
+def _is_retryable(exc: httpx.HTTPError | ResponseError) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    if isinstance(exc, ResponseError):
+        return exc.status_code >= 500
+    return isinstance(exc, httpx.TransportError)
+
+
+class BoundChatModel(Protocol):
+    async def ainvoke(self, input: Sequence[BaseMessage]) -> AIMessage: ...
+
+
+class ChatModel(Protocol):
+    def bind_tools(self, tools: Sequence[dict[str, Any]]) -> BoundChatModel: ...
+
+    async def ainvoke(self, input: Sequence[BaseMessage]) -> AIMessage: ...
 
 
 @dataclass(frozen=True)
@@ -23,49 +45,72 @@ class LLMResponse:
     total_tokens: int = 0
 
 
-def _is_retryable(exc: httpx.HTTPError) -> bool:
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
-    return isinstance(exc, httpx.TransportError)  # includes timeouts
-
-
 class LLMClient:
-    """Async client for the model gateway. Timeout lives on the httpx client; one retry."""
+    """Async chat client backed by a LangChain chat model."""
 
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self._client = client
+    def __init__(self, model: ChatModel) -> None:
+        self._model = model
 
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
     ) -> LLMResponse:
-        payload: dict[str, Any] = {"messages": messages}
-        if tools:
-            payload["tools"] = tools
-
-        last_error: httpx.HTTPError | None = None
-        for _ in range(MAX_ATTEMPTS):
+        chat_messages = self._convert_messages(messages)
+        model = self._model.bind_tools(tools) if tools else self._model
+        last_error: httpx.HTTPError | ResponseError | None = None
+        for attempt in range(MAX_ATTEMPTS):
             record_llm_call()
             try:
-                response = await self._client.post("/v1/chat", json=payload)
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
+                response = await model.ainvoke(chat_messages)
+                break
+            except (httpx.HTTPError, ResponseError) as exc:
                 last_error = exc
-                if not _is_retryable(exc):
-                    break
-                continue
-            return self._parse(response.json())
-        raise UpstreamError(f"model gateway failed: {last_error!r}") from last_error
+                if not _is_retryable(exc) or attempt + 1 == MAX_ATTEMPTS:
+                    raise UpstreamError(f"model request failed: {exc!r}") from exc
+        else:
+            if last_error is None:
+                raise RuntimeError("model request loop ended without a response or error")
+            raise UpstreamError(f"model request failed: {last_error!r}") from last_error
 
-    @staticmethod
-    def _parse(body: dict[str, Any]) -> LLMResponse:
-        message = body["message"]
-        total_tokens = int(body["usage"]["total_tokens"])
+        usage = response.usage_metadata or {}
+        total_tokens = int(usage.get("total_tokens", 0))
         record_tokens(total_tokens)
         return LLMResponse(
-            content=message.get("content") or "",
+            content=response.text(),
             tool_calls=[
-                ToolCall(id=c["id"], name=c["name"], arguments=c.get("arguments") or {})
-                for c in message.get("tool_calls") or []
+                ToolCall(
+                    id=call.get("id") or str(uuid4()),
+                    name=call["name"],
+                    arguments=call["args"],
+                )
+                for call in response.tool_calls
             ],
             total_tokens=total_tokens,
         )
+
+    @staticmethod
+    def _convert_messages(messages: Sequence[dict[str, Any]]) -> list[BaseMessage]:
+        converted: list[BaseMessage] = []
+        for message in messages:
+            role = message["role"]
+            content = message.get("content") or ""
+            if role == "system":
+                converted.append(SystemMessage(content=content))
+            elif role == "user":
+                converted.append(HumanMessage(content=content))
+            elif role == "assistant":
+                calls = [
+                    {"id": call["id"], "name": call["name"], "args": call["arguments"]}
+                    for call in message.get("tool_calls") or []
+                ]
+                converted.append(AIMessage(content=content, tool_calls=calls))
+            elif role == "tool":
+                converted.append(
+                    ToolMessage(
+                        content=content,
+                        tool_call_id=message["tool_call_id"],
+                        name=message.get("name"),
+                    )
+                )
+            else:
+                raise ValueError(f"Unsupported message role: {role}")
+        return converted
