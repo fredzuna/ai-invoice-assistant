@@ -3,7 +3,6 @@ import pytest
 from psycopg_pool import AsyncConnectionPool
 
 from app.agent.intent import Intent, classify_intent
-from app.agent.knowledge import answer_knowledge_question
 from app.agent.loop import MAX_ITERATIONS, run_agent
 from app.agent.tools import (
     IssueCreditArgs,
@@ -12,8 +11,6 @@ from app.agent.tools import (
     tool_schemas,
 )
 from app.clients.embeddings import EmbeddingClient
-from app.dependencies import get_embedder, get_llm, get_pool
-from app.main import app
 from app.rag.chunker import chunk_text
 from app.rag.ingest import DocumentIn, ingest_document
 from app.rag.search import TOP_K, search
@@ -34,7 +31,9 @@ async def test_ask_contract(client: httpx.AsyncClient) -> None:
     assert all(s["document_id"].startswith("acme-") for s in body["sources"])
 
 
-async def test_agent_result_shape(seeded: AsyncConnectionPool) -> None:
+async def test_agent_result_shape(
+    seeded: AsyncConnectionPool, embedder: EmbeddingClient
+) -> None:
     calls = []
 
     def reply(payload: dict) -> dict:
@@ -53,17 +52,74 @@ async def test_agent_result_shape(seeded: AsyncConnectionPool) -> None:
         question="What is the status of INV-ACME-0001?",
         pool=seeded,
         llm=llm_client(reply),
-        allowed_tools=("lookup_invoice",),
+        embedder=embedder,
     )
     assert isinstance(result.answer, str) and result.answer
     assert result.iterations == 2
     assert [c["name"] for c in result.tool_calls] == ["lookup_invoice"]
     assert result.tool_calls[0]["result"]["invoice"]["status"] == "open"
     system, question = calls[0]["messages"]
-    assert "lookup_invoice whenever" in system["content"]
+    assert "Use lookup_invoice for questions about a specific invoice" in system["content"]
     assert [tool["function"]["name"] for tool in calls[0]["tools"]] == ["lookup_invoice"]
     assert question["content"] == "Customer question:\nWhat is the status of INV-ACME-0001?"
+    assert [message["role"] for message in calls[1]["messages"]].count("tool") == 1
     assert result.sources == []
+
+
+async def test_credit_agent_executes_issue_credit_automatically(
+    seeded: AsyncConnectionPool, embedder: EmbeddingClient
+) -> None:
+    calls = []
+
+    def reply(payload: dict) -> dict:
+        calls.append(payload)
+        if len(calls) == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "credit-1",
+                        "name": "issue_credit",
+                        "arguments": {
+                            "invoice_id": "INV-ACME-0001",
+                            "amount_cents": 500,
+                            "reason": "Goodwill adjustment",
+                            "confirmed": True,
+                        },
+                    }
+                ],
+            }
+        return {"role": "assistant", "content": "A $5 credit was issued."}
+
+    result = await run_agent(
+        tenant_id="acme",
+        question="Please issue a $5 credit for invoice INV-ACME-0001.",
+        pool=seeded,
+        llm=llm_client(reply),
+        embedder=embedder,
+    )
+
+    assert [tool["function"]["name"] for tool in calls[0]["tools"]] == ["issue_credit"]
+    assert result.iterations == 2
+    assert result.tool_calls == [
+        {
+            "name": "issue_credit",
+            "arguments": {
+                "invoice_id": "INV-ACME-0001",
+                "amount_cents": 500,
+                "reason": "Goodwill adjustment",
+                "confirmed": True,
+            },
+            "result": {
+                "credit": {
+                    "invoice_id": "INV-ACME-0001",
+                    "amount_cents": 500,
+                    "currency": "USD",
+                }
+            },
+        }
+    ]
 
 
 async def test_health(client: httpx.AsyncClient) -> None:
@@ -147,7 +203,7 @@ async def test_tool_schemas_are_validated(
     assert "not available" in forbidden["error"]
 
 
-async def test_knowledge_path_searches_tenant_context_and_calls_llm_once(
+async def test_knowledge_path_searches_tenant_context_and_answers(
     seeded: AsyncConnectionPool, embedder: EmbeddingClient
 ) -> None:
     calls = []
@@ -156,7 +212,7 @@ async def test_knowledge_path_searches_tenant_context_and_calls_llm_once(
         calls.append(payload)
         return {"role": "assistant", "content": "Refunds are available within 30 days."}
 
-    result = await answer_knowledge_question(
+    result = await run_agent(
         tenant_id="acme",
         question="What is the refund policy?",
         pool=seeded,
@@ -167,15 +223,23 @@ async def test_knowledge_path_searches_tenant_context_and_calls_llm_once(
     assert result.iterations == 1
     assert result.tool_calls == []
     assert len(calls) == 1
-    assert "tools" not in calls[0]
     assert result.sources and {chunk.document_id for chunk in result.sources} == {
         "acme-policy-001"
     }
     first_messages = calls[0]["messages"]
-    assert first_messages[1]["content"] == "Customer question:\nWhat is the refund policy?"
-    context = first_messages[2]["content"]
+    assert any(
+        message["role"] == "user"
+        and message["content"] == "Customer question:\nWhat is the refund policy?"
+        for message in first_messages
+    )
+    context = next(
+        message["content"]
+        for message in first_messages
+        if message["role"] == "user" and "<retrieved_data>" in message["content"]
+    )
     assert "Refunds are available within 30 days" in context
     assert "45 days" not in context
+    assert "tools" not in calls[0]
 
 
 @pytest.mark.parametrize(
@@ -250,7 +314,7 @@ async def test_invalid_input_returns_4xx(client: httpx.AsyncClient) -> None:
 
 
 async def test_agent_terminates_for_simple_query(
-    seeded: AsyncConnectionPool,
+    seeded: AsyncConnectionPool, embedder: EmbeddingClient
 ) -> None:
     llm_calls = []
 
@@ -263,10 +327,10 @@ async def test_agent_terminates_for_simple_query(
         question="How long do refunds take?",
         pool=seeded,
         llm=llm_client(answer),
-        allowed_tools=("lookup_invoice",),
+        embedder=embedder,
     )
     assert result.iterations == 1 and len(llm_calls) == 1
-    assert [tool["function"]["name"] for tool in llm_calls[0]["tools"]] == ["lookup_invoice"]
+    assert "tools" not in llm_calls[0]
     assert result.tool_calls == []
 
     # Even a model that keeps asking for tools is cut off at MAX_ITERATIONS.
@@ -276,9 +340,9 @@ async def test_agent_terminates_for_simple_query(
 
     stuck = await run_agent(
         tenant_id="acme",
-        question="Loop forever",
+        question="What is the status of invoice INV-ACME-0001?",
         pool=seeded,
         llm=llm_client(always_tool),
-        allowed_tools=("lookup_invoice",),
+        embedder=embedder,
     )
     assert stuck.iterations == MAX_ITERATIONS

@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 import pytest_asyncio
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from psycopg_pool import AsyncConnectionPool
 
 from app.clients.embeddings import EmbeddingClient
@@ -58,7 +59,9 @@ class ScriptedChatModel:
     def __init__(self, reply: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
         self.reply = reply
 
-    def bind_tools(self, tools: Sequence[dict[str, Any]]) -> "BoundScriptedChatModel":
+    def bind_tools(
+        self, tools: Sequence[Any], **kwargs: Any
+    ) -> "BoundScriptedChatModel":
         return BoundScriptedChatModel(self.reply, tools)
 
     async def ainvoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
@@ -69,10 +72,17 @@ class BoundScriptedChatModel:
     def __init__(
         self,
         reply: Callable[[dict[str, Any]], dict[str, Any]],
-        tools: Sequence[dict[str, Any]] | None,
+        tools: Sequence[Any] | None,
     ) -> None:
         self.reply = reply
-        self.tools = tools
+        self.tools = (
+            [
+                tool if isinstance(tool, dict) else convert_to_openai_tool(tool)
+                for tool in tools
+            ]
+            if tools is not None
+            else None
+        )
 
     async def ainvoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
         payload = {"messages": [_message_payload(message) for message in messages]}

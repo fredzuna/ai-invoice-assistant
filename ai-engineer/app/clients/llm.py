@@ -51,8 +51,14 @@ class LLMClient:
     def __init__(self, model: ChatModel) -> None:
         self._model = model
 
+    @property
+    def model(self) -> ChatModel:
+        return self._model
+
     async def chat(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+        self,
+        messages: Sequence[dict[str, Any] | BaseMessage],
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         chat_messages = self._convert_messages(messages)
         model = self._model.bind_tools(tools) if tools else self._model
@@ -88,9 +94,14 @@ class LLMClient:
         )
 
     @staticmethod
-    def _convert_messages(messages: Sequence[dict[str, Any]]) -> list[BaseMessage]:
+    def _convert_messages(
+        messages: Sequence[dict[str, Any] | BaseMessage],
+    ) -> list[BaseMessage]:
         converted: list[BaseMessage] = []
         for message in messages:
+            if isinstance(message, BaseMessage):
+                converted.append(message)
+                continue
             role = message["role"]
             content = message.get("content") or ""
             if role == "system":

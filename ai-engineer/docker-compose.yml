@@ -6,7 +6,7 @@ services:
     environment:
       DATABASE_URL: postgresql://billforge:billforge@postgres:5432/billforge
       OLLAMA_BASE_URL: http://ollama:11434
-      LLM_MODEL: llama3.1:8b
+      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       EMBEDDING_BASE_URL: http://embedding-service:8002
     depends_on:
       postgres:
@@ -41,6 +41,8 @@ services:
     image: ollama/ollama:latest
     volumes:
       - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11435:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 5s
@@ -49,6 +51,8 @@ services:
 
   embedding-service:
     build: ./services/embedding_service
+    ports:
+      - "127.0.0.1:8002:8002"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 5s

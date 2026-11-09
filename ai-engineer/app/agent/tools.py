@@ -5,6 +5,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from langchain_core.tools import StructuredTool
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -104,6 +105,44 @@ def tool_schemas(names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
             }
         )
     return schemas
+
+
+def create_agent_tools(
+    pool: AsyncConnectionPool,
+    tenant_id: str,
+    *,
+    billing_service: BillingService,
+    allowed_tools: tuple[str, ...],
+    idempotency_key: str | None = None,
+) -> list[StructuredTool]:
+    def create_tool(name: str, args_model: type[BaseModel], description: str) -> StructuredTool:
+        async def invoke(**arguments: Any) -> str:
+            result = await execute_tool(
+                pool,
+                tenant_id,
+                name,
+                arguments,
+                billing_service=billing_service,
+                idempotency_key=idempotency_key,
+                allowed_tools=allowed_tools,
+            )
+            return json.dumps(result)
+
+        return StructuredTool.from_function(
+            coroutine=invoke,
+            name=name,
+            description=description,
+            args_schema=args_model,
+        )
+
+    tools: list[StructuredTool] = []
+    for name in allowed_tools:
+        tool = TOOLS.get(name)
+        if tool is None:
+            continue
+        args_model, _, description = tool
+        tools.append(create_tool(name, args_model, description))
+    return tools
 
 
 async def execute_tool(

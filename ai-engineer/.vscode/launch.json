@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI: Billforge Support Copilot",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.debug",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "OLLAMA_BASE_URL": "http://127.0.0.1:11435"
+      },
+      "justMyCode": true
+    }
+  ]
+}
